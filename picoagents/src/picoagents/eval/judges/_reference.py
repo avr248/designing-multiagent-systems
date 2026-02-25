@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 from typing import List, Optional
 
 from ..._cancellation_token import CancellationToken
-from ...types import EvalScore, EvalTrajectory
+from ...types import EvalScore, RunTrajectory
 from ._base import BaseEvalJudge
 
 
@@ -51,7 +51,7 @@ class ExactMatchJudge(BaseEvalJudge):
 
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:
@@ -161,7 +161,7 @@ class FuzzyMatchJudge(BaseEvalJudge):
 
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:
@@ -267,7 +267,7 @@ class ContainsJudge(BaseEvalJudge):
 
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:

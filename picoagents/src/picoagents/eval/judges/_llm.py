@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 from ..._cancellation_token import CancellationToken
 from ...llm import BaseChatCompletionClient
 from ...messages import SystemMessage, UserMessage
-from ...types import EvalScore, EvalTrajectory
+from ...types import EvalScore, RunTrajectory
 from ._base import BaseEvalJudge
 
 
@@ -50,7 +50,7 @@ class LLMEvalJudge(BaseEvalJudge):
 
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:
@@ -64,12 +64,15 @@ class LLMEvalJudge(BaseEvalJudge):
         Returns:
             EvalScore with overall and dimensional scores
         """
-        # Use provided criteria or default
-        eval_criteria = criteria or self.default_criteria
+        # Use provided criteria, task-level criteria, or defaults
+        eval_criteria = criteria or trajectory.task.eval_criteria or self.default_criteria
+
+        # Read rubric directly from task (first-class field)
+        rubric = trajectory.task.rubric
 
         try:
             # Build the evaluation prompt
-            system_prompt = self._build_system_prompt(eval_criteria)
+            system_prompt = self._build_system_prompt(eval_criteria, rubric)
             user_prompt = self._build_user_prompt(trajectory)
 
             messages = [
@@ -111,9 +114,16 @@ class LLMEvalJudge(BaseEvalJudge):
                 },
             )
 
-    def _build_system_prompt(self, criteria: List[str]) -> str:
-        """Build the system prompt for the evaluation LLM."""
-        criteria_descriptions = {
+    def _build_system_prompt(self, criteria: List[str], rubric: Optional[Dict[str, str]] = None) -> str:
+        """Build the system prompt for the evaluation LLM.
+
+        Args:
+            criteria: List of evaluation dimensions to score
+            rubric: Optional rubric from the task - maps criterion name to
+                scoring guidance (e.g. "10: All files reviewed. 5: Most. 0: None.")
+                When provided, rubric descriptions replace the generic defaults.
+        """
+        default_descriptions = {
             "accuracy": "How factually correct and truthful is the response?",
             "completeness": "How thoroughly does the response address the task?",
             "helpfulness": "How useful and actionable is the response?",
@@ -124,9 +134,13 @@ class LLMEvalJudge(BaseEvalJudge):
 
         criteria_details = []
         for criterion in criteria:
-            description = criteria_descriptions.get(
-                criterion, f"Quality of {criterion}"
-            )
+            # Rubric takes priority over generic defaults
+            if rubric and criterion in rubric:
+                description = rubric[criterion]
+            else:
+                description = default_descriptions.get(
+                    criterion, f"Quality of {criterion}"
+                )
             criteria_details.append(f"- {criterion}: {description}")
 
         base_prompt = f"""You are an expert evaluation judge. Your task is to score AI agent conversations based on specific criteria.
@@ -162,16 +176,22 @@ Respond with this EXACT JSON format:
 
         return base_prompt
 
-    def _build_user_prompt(self, trajectory: EvalTrajectory) -> str:
-        """Build the user prompt containing the trajectory to evaluate."""
-        task_info = f"Task: {trajectory.task.name}\\nInput: {trajectory.task.input}"
+    def _build_user_prompt(self, trajectory: RunTrajectory) -> str:
+        """Build the user prompt containing the trajectory to evaluate.
+
+        Formats each message with explicit role labels and full tool call
+        details so the judge can see exactly what happened.
+        """
+        task_info = f"Task: {trajectory.task.name}\nInput: {trajectory.task.input}"
 
         if trajectory.task.expected_output:
-            task_info += f"\\nExpected Output: {trajectory.task.expected_output}"
+            task_info += f"\nExpected Output: {trajectory.task.expected_output}"
 
         if trajectory.success and trajectory.messages:
-            # Get the full conversation - messages already have proper string formatting
-            actual_output = "\n".join(str(msg) for msg in trajectory.messages)
+            formatted_msgs = []
+            for msg in trajectory.messages:
+                formatted_msgs.append(self._format_message(msg))
+            actual_output = "\n\n".join(formatted_msgs)
 
             conversation_summary = f"Messages exchanged: {len(trajectory.messages)}"
             if trajectory.usage:
@@ -189,6 +209,62 @@ Complete Agent Conversation:
 {actual_output}
 
 Please evaluate this complete conversation according to the specified criteria."""
+
+    def _format_message(self, msg) -> str:
+        """Format a single message with role label and full structure.
+
+        Shows tool calls, tool results, and proper role labels so the
+        judge sees exactly what happened in the conversation.
+        """
+        role = getattr(msg, "role", "unknown")
+        source = getattr(msg, "source", "")
+        content = getattr(msg, "content", "")
+
+        if role == "system":
+            return f"[SYSTEM ({source})]\n{content}"
+
+        elif role == "user":
+            return f"[USER ({source})]\n{content}"
+
+        elif role == "assistant":
+            parts = [f"[ASSISTANT ({source})]"]
+            if content:
+                parts.append(content)
+
+            # Show tool calls with names and parameters
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                for tc in tool_calls:
+                    tool_name = getattr(tc, "tool_name", str(tc))
+                    params = getattr(tc, "parameters", {})
+                    # Truncate large parameter values for readability
+                    param_strs = []
+                    for k, v in params.items():
+                        v_str = str(v)
+                        if len(v_str) > 200:
+                            v_str = v_str[:200] + "..."
+                        param_strs.append(f"  {k}: {v_str}")
+                    param_block = "\n".join(param_strs)
+                    parts.append(f"[TOOL CALL: {tool_name}]\n{param_block}")
+
+            return "\n".join(parts)
+
+        elif role == "tool":
+            tool_name = getattr(msg, "tool_name", "unknown")
+            success = getattr(msg, "success", True)
+            error = getattr(msg, "error", None)
+            status = "SUCCESS" if success else "FAILED"
+            header = f"[TOOL RESULT ({tool_name}) - {status}]"
+            if error:
+                header += f"\nError: {error}"
+            # Truncate very long tool output for judge readability
+            display_content = content
+            if len(display_content) > 2000:
+                display_content = display_content[:2000] + "\n... (truncated)"
+            return f"{header}\n{display_content}"
+
+        else:
+            return f"[{role.upper()} ({source})]\n{content}"
 
     def _parse_llm_response(self, response: str, criteria: List[str]) -> Dict:
         """Parse the LLM's structured response."""

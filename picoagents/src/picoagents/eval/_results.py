@@ -1,8 +1,8 @@
 """
-Benchmark results and storage.
+Evaluation results and storage.
 
-This module defines TaskResult and BenchmarkResults - the data structures
-for storing and analyzing benchmark execution results.
+This module defines TaskResult and EvalResults - the data structures
+for storing and analyzing evaluation execution results.
 """
 
 import json
@@ -12,15 +12,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from ...types import EvalScore, EvalTrajectory
+from ..types import EvalScore, RunTrajectory
 
 
 @dataclass
 class TaskResult:
-    """Result of running one task with one configuration/target.
+    """Result of running one task with one target.
 
-    Captures both the evaluation score and execution metrics like
-    token usage, file reads, and compaction events.
+    Captures the evaluation score and execution metrics like
+    token usage, file reads, and compaction events. Token fields
+    are properties that read from trajectory.usage to avoid duplication.
     """
 
     # Identification
@@ -28,15 +29,8 @@ class TaskResult:
     target_name: str
 
     # Execution data
-    trajectory: EvalTrajectory
+    trajectory: RunTrajectory
     score: EvalScore
-
-    # Metrics
-    total_tokens: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    iterations: int = 0
-    duration_ms: int = 0
 
     # File access patterns
     files_read: Dict[str, int] = field(default_factory=dict)  # path -> count
@@ -50,19 +44,41 @@ class TaskResult:
     # Additional metrics from middleware
     metrics: Dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self, include_trace: bool = False) -> Dict[str, Any]:
+    @property
+    def total_tokens(self) -> int:
+        if self.trajectory.usage:
+            return self.trajectory.usage.tokens_input + self.trajectory.usage.tokens_output
+        return 0
+
+    @property
+    def input_tokens(self) -> int:
+        return self.trajectory.usage.tokens_input if self.trajectory.usage else 0
+
+    @property
+    def output_tokens(self) -> int:
+        return self.trajectory.usage.tokens_output if self.trajectory.usage else 0
+
+    @property
+    def iterations(self) -> int:
+        return self.trajectory.usage.llm_calls if self.trajectory.usage else 0
+
+    @property
+    def duration_ms(self) -> int:
+        return self.trajectory.usage.duration_ms if self.trajectory.usage else 0
+
+    def to_dict(self) -> Dict[str, Any]:
         """Serialize result to dictionary.
 
-        Args:
-            include_trace: If True, include full message history and events
+        Always includes the full message trace and score rationale.
         """
-        result = {
+        return {
             "task_id": self.task_id,
             "target_name": self.target_name,
             "score": {
                 "overall": self.score.overall,
                 "dimensions": self.score.dimensions,
                 "reasoning": self.score.reasoning,
+                "metadata": self.score.metadata if self.score.metadata else {},
             },
             "total_tokens": self.total_tokens,
             "input_tokens": self.input_tokens,
@@ -77,19 +93,14 @@ class TaskResult:
             "metrics": self.metrics,
             "success": self.trajectory.success,
             "error": self.trajectory.error,
-        }
-
-        if include_trace:
-            # Serialize full message history
-            result["trace"] = {
+            "trace": {
                 "messages": self._serialize_messages(self.trajectory.messages),
                 "events": self.trajectory.metadata.get("events", []),
                 "event_count": self.trajectory.metadata.get("event_count", 0),
-            }
+            },
+        }
 
-        return result
-
-    def _serialize_messages(self, messages: List[Any]) -> List[Dict[str, Any]]:
+    def _serialize_messages(self, messages: Sequence[Any]) -> List[Dict[str, Any]]:
         """Serialize messages to JSON-safe format."""
         serialized = []
         for msg in messages:
@@ -99,7 +110,6 @@ class TaskResult:
                 "source": getattr(msg, "source", None),
             }
 
-            # Handle tool calls
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 msg_dict["tool_calls"] = [
                     {
@@ -110,7 +120,6 @@ class TaskResult:
                     for tc in msg.tool_calls
                 ]
 
-            # Handle tool messages
             if hasattr(msg, "tool_call_id"):
                 msg_dict["tool_call_id"] = msg.tool_call_id
             if hasattr(msg, "tool_name"):
@@ -120,7 +129,6 @@ class TaskResult:
             if hasattr(msg, "error") and msg.error:
                 msg_dict["error"] = msg.error
 
-            # Handle usage info if present
             if hasattr(msg, "usage") and msg.usage:
                 msg_dict["usage"] = {
                     "tokens_input": getattr(msg.usage, "tokens_input", 0),
@@ -132,14 +140,7 @@ class TaskResult:
         return serialized
 
     def save_trace(self, path: Path) -> Path:
-        """Save full trace to a separate JSON file.
-
-        Args:
-            path: Path to save the trace file
-
-        Returns:
-            Path to saved file
-        """
+        """Save full trace to a separate JSON file."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -159,27 +160,6 @@ class TaskResult:
 
         path.write_text(json.dumps(trace_data, indent=2, default=str))
         return path
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any], trajectory: EvalTrajectory, score: EvalScore) -> "TaskResult":
-        """Create result from dictionary."""
-        return cls(
-            task_id=data["task_id"],
-            target_name=data["target_name"],
-            trajectory=trajectory,
-            score=score,
-            total_tokens=data.get("total_tokens", 0),
-            input_tokens=data.get("input_tokens", 0),
-            output_tokens=data.get("output_tokens", 0),
-            iterations=data.get("iterations", 0),
-            duration_ms=data.get("duration_ms", 0),
-            files_read=data.get("files_read", {}),
-            unique_files=data.get("unique_files", 0),
-            duplicate_reads=data.get("duplicate_reads", 0),
-            compaction_events=data.get("compaction_events", 0),
-            tokens_saved=data.get("tokens_saved", 0),
-            metrics=data.get("metrics", {}),
-        )
 
     def __repr__(self) -> str:
         return (
@@ -252,8 +232,8 @@ class TargetSummary:
 
 
 @dataclass
-class BenchmarkResults:
-    """Complete results from a benchmark run.
+class EvalResults:
+    """Complete results from an evaluation run.
 
     Stores the results matrix (target x task) along with aggregated
     summaries and comparison utilities.
@@ -281,11 +261,7 @@ class BenchmarkResults:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def add_result(self, result: TaskResult) -> None:
-        """Add a task result.
-
-        Args:
-            result: TaskResult to add
-        """
+        """Add a task result."""
         if result.target_name not in self.results:
             self.results[result.target_name] = {}
             if result.target_name not in self.target_names:
@@ -300,23 +276,11 @@ class BenchmarkResults:
         self._summaries = None
 
     def get_result(self, target_name: str, task_id: str) -> Optional[TaskResult]:
-        """Get a specific result.
-
-        Args:
-            target_name: Target/config name
-            task_id: Task ID
-
-        Returns:
-            TaskResult or None if not found
-        """
+        """Get a specific result."""
         return self.results.get(target_name, {}).get(task_id)
 
     def get_summaries(self) -> Dict[str, TargetSummary]:
-        """Compute and return summaries for each target.
-
-        Returns:
-            Dict mapping target name to TargetSummary
-        """
+        """Compute and return summaries for each target."""
         if self._summaries is not None:
             return self._summaries
 
@@ -366,14 +330,7 @@ class BenchmarkResults:
         return summaries
 
     def compare_targets(self, baseline: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
-        """Generate comparison metrics vs baseline.
-
-        Args:
-            baseline: Target name to use as baseline (default: first target)
-
-        Returns:
-            Dict mapping target name to comparison metrics
-        """
+        """Generate comparison metrics vs baseline."""
         summaries = self.get_summaries()
 
         if not summaries:
@@ -394,7 +351,6 @@ class BenchmarkResults:
                 "is_baseline": target_name == baseline,
             }
 
-            # Token comparison
             if baseline_summary.total_tokens > 0:
                 token_diff = summary.total_tokens - baseline_summary.total_tokens
                 token_pct = (token_diff / baseline_summary.total_tokens) * 100
@@ -404,11 +360,9 @@ class BenchmarkResults:
                 comp["token_diff"] = 0
                 comp["token_diff_pct"] = 0
 
-            # Score comparison
             score_diff = summary.avg_score - baseline_summary.avg_score
             comp["score_diff"] = score_diff
 
-            # Iteration comparison
             if baseline_summary.total_iterations > 0:
                 iter_diff = summary.total_iterations - baseline_summary.total_iterations
                 iter_pct = (iter_diff / baseline_summary.total_iterations) * 100
@@ -418,7 +372,6 @@ class BenchmarkResults:
                 comp["iteration_diff"] = 0
                 comp["iteration_diff_pct"] = 0
 
-            # Duration comparison
             if baseline_summary.total_duration_ms > 0:
                 dur_diff = summary.total_duration_ms - baseline_summary.total_duration_ms
                 dur_pct = (dur_diff / baseline_summary.total_duration_ms) * 100
@@ -453,115 +406,143 @@ class BenchmarkResults:
         """Serialize results to JSON string."""
         return json.dumps(self.to_dict(), indent=2, default=str)
 
-    def save(self, path: Optional[Path] = None, include_traces: bool = False) -> Path:
+    def save(self, path: Optional[Path] = None) -> Path:
         """Save results to JSON file.
 
         Args:
-            path: Output path (default: .picoagents/benchmarks/{run_id}.json)
-            include_traces: If True, also save full traces to a traces/ subdirectory
+            path: Output path (default: .picoagents/eval/{run_id}.json)
 
         Returns:
             Path to saved file
         """
         if path is None:
-            output_dir = Path.cwd() / ".picoagents" / "benchmarks"
+            output_dir = Path.cwd() / ".picoagents" / "eval"
             output_dir.mkdir(parents=True, exist_ok=True)
             timestamp_str = self.timestamp.strftime("%Y%m%d_%H%M%S")
-            path = output_dir / f"benchmark_{self.run_id}_{timestamp_str}.json"
+            path = output_dir / f"eval_{self.run_id}_{timestamp_str}.json"
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.to_json())
 
-        # Save individual traces if requested
-        if include_traces:
-            traces_dir = path.parent / f"traces_{self.run_id}"
-            traces_dir.mkdir(parents=True, exist_ok=True)
-
-            for target_name, tasks in self.results.items():
-                for task_id, result in tasks.items():
-                    trace_path = traces_dir / f"{target_name}_{task_id}.json"
-                    result.save_trace(trace_path)
-
         return path
-
-    def save_traces(self, output_dir: Optional[Path] = None) -> Path:
-        """Save all traces to a directory.
-
-        Args:
-            output_dir: Directory to save traces (default: .picoagents/benchmarks/traces_{run_id}/)
-
-        Returns:
-            Path to traces directory
-        """
-        if output_dir is None:
-            output_dir = Path.cwd() / ".picoagents" / "benchmarks" / f"traces_{self.run_id}"
-
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        for target_name, tasks in self.results.items():
-            for task_id, result in tasks.items():
-                trace_path = output_dir / f"{target_name}_{task_id}.json"
-                result.save_trace(trace_path)
-
-        return output_dir
 
     def __repr__(self) -> str:
         return (
-            f"BenchmarkResults(run_id={self.run_id!r}, dataset={self.dataset_name!r}, "
+            f"EvalResults(run_id={self.run_id!r}, dataset={self.dataset_name!r}, "
             f"targets={len(self.target_names)}, tasks={len(self.task_ids)})"
         )
 
 
-def load_benchmark_results(path: Path) -> BenchmarkResults:
-    """Load benchmark results from JSON file.
+def load_eval_results(path: Path) -> EvalResults:
+    """Load evaluation results from JSON file.
 
-    Note: This loads summary data only. Full trajectories are not preserved
-    in JSON serialization to keep file sizes manageable.
+    Reconstructs full TaskResults including scores, rationale, and message traces.
 
     Args:
         path: Path to JSON file
 
     Returns:
-        BenchmarkResults instance (without full trajectories)
+        EvalResults instance with full results
     """
+    from ..messages import AssistantMessage, SystemMessage, ToolMessage, UserMessage
+    from ..types import Task, Usage
+
     path = Path(path)
     data = json.loads(path.read_text())
 
-    results = BenchmarkResults(
+    results = EvalResults(
         run_id=data["run_id"],
         timestamp=datetime.fromisoformat(data["timestamp"]),
         dataset_name=data["dataset_name"],
         dataset_version=data.get("dataset_version", ""),
-        target_names=data["target_names"],
-        task_ids=data["task_ids"],
         metadata=data.get("metadata", {}),
     )
 
-    # Note: We don't fully reconstruct TaskResults since trajectories aren't serialized
-    # This is for viewing/comparing saved results, not re-running
+    msg_type_map = {
+        "SystemMessage": SystemMessage,
+        "UserMessage": UserMessage,
+        "AssistantMessage": AssistantMessage,
+        "ToolMessage": ToolMessage,
+    }
+
+    for target_name, tasks in data.get("results", {}).items():
+        for task_id, result_data in tasks.items():
+            # Reconstruct messages from trace
+            messages = []
+            trace = result_data.get("trace", {})
+            for msg_data in trace.get("messages", []):
+                msg_cls = msg_type_map.get(msg_data.get("type"))
+                if msg_cls and msg_data.get("content") is not None:
+                    kwargs = {"content": msg_data["content"]}
+                    if msg_data.get("source"):
+                        kwargs["source"] = msg_data["source"]
+                    try:
+                        messages.append(msg_cls(**kwargs))
+                    except Exception:
+                        pass
+
+            # Reconstruct trajectory
+            trajectory = RunTrajectory(
+                task=Task(name=task_id, input=""),
+                messages=messages,
+                success=result_data.get("success", False),
+                error=result_data.get("error"),
+                usage=Usage(
+                    duration_ms=result_data.get("duration_ms", 0),
+                    llm_calls=result_data.get("iterations", 0),
+                    tokens_input=result_data.get("input_tokens", 0),
+                    tokens_output=result_data.get("output_tokens", 0),
+                ),
+                metadata={"events": trace.get("events", [])},
+            )
+
+            # Reconstruct score
+            score_data = result_data.get("score", {})
+            score = EvalScore(
+                overall=score_data.get("overall", 0.0),
+                dimensions=score_data.get("dimensions", {}),
+                reasoning=score_data.get("reasoning", {}),
+                trajectory=trajectory,
+                metadata=score_data.get("metadata", {}),
+            )
+
+            task_result = TaskResult(
+                task_id=task_id,
+                target_name=target_name,
+                trajectory=trajectory,
+                score=score,
+                files_read=result_data.get("files_read", {}),
+                unique_files=result_data.get("unique_files", 0),
+                duplicate_reads=result_data.get("duplicate_reads", 0),
+                compaction_events=result_data.get("compaction_events", 0),
+                tokens_saved=result_data.get("tokens_saved", 0),
+                metrics=result_data.get("metrics", {}),
+            )
+            results.add_result(task_result)
 
     return results
 
 
-def list_benchmark_results(
+def list_eval_results(
     output_dir: Optional[Path] = None,
 ) -> List[Path]:
-    """List saved benchmark result files.
+    """List saved evaluation result files.
 
     Args:
-        output_dir: Directory to search (default: .picoagents/benchmarks/)
+        output_dir: Directory to search (default: .picoagents/eval/)
 
     Returns:
         List of paths, newest first
     """
-    output_dir = output_dir or Path.cwd() / ".picoagents" / "benchmarks"
+    output_dir = output_dir or Path.cwd() / ".picoagents" / "eval"
     if not output_dir.exists():
         return []
 
+    # Support both old benchmark_* and new eval_* patterns
+    all_files = list(output_dir.glob("eval_*.json")) + list(output_dir.glob("benchmark_*.json"))
     return sorted(
-        output_dir.glob("benchmark_*.json"),
+        all_files,
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )

@@ -541,13 +541,24 @@ OrchestrationEvent = Union[
 
 
 # Evaluation Types
-class EvalTask(BaseModel):
-    """Represents a task to be evaluated."""
+
+
+class Task(BaseModel):
+    """A task to run and evaluate."""
 
     name: str = Field(..., description="Human-readable task name")
     input: str = Field(..., description="Input/prompt for the task")
     expected_output: Optional[str] = Field(
         None, description="Expected output for comparison"
+    )
+    id: Optional[str] = Field(None, description="Unique task identifier")
+    category: str = Field(default="general", description="Task category for filtering")
+    eval_criteria: List[str] = Field(
+        default_factory=list, description="Criteria to evaluate on"
+    )
+    rubric: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-criterion scoring guidance, e.g. {'completeness': '10: All files. 5: Most. 0: None.'}",
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Additional task metadata"
@@ -557,10 +568,10 @@ class EvalTask(BaseModel):
         frozen = True
 
 
-class EvalTrajectory(BaseModel):
-    """Complete execution trajectory for an evaluation task."""
+class RunTrajectory(BaseModel):
+    """What happened when a task was run against a target."""
 
-    task: EvalTask = Field(..., description="The task that was evaluated")
+    task: Task = Field(..., description="The task that was run")
     messages: Sequence[Message] = Field(..., description="Complete message sequence")
     success: bool = Field(..., description="Whether execution succeeded")
     error: Optional[str] = Field(None, description="Error message if failed")
@@ -583,8 +594,8 @@ class EvalScore(BaseModel):
     reasoning: Dict[str, str] = Field(
         default_factory=dict, description="Reasoning for each dimension"
     )
-    trajectory: Optional["EvalTrajectory"] = Field(
-        None, description="The trajectory that was evaluated"
+    trajectory: Optional["RunTrajectory"] = Field(
+        None, description="The trajectory that was scored"
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Additional scoring metadata"
@@ -608,18 +619,6 @@ class EvalScore(BaseModel):
             return f"EXECUTION FAILED: {self.trajectory.error if self.trajectory else 'No trajectory'}"
 
         return "\n".join(str(msg) for msg in self.trajectory.messages)
-
-    class Config:
-        frozen = True
-
-
-class EvalResult(BaseModel):
-    """Complete evaluation result with trajectory and score."""
-
-    task: EvalTask = Field(..., description="The evaluated task")
-    trajectory: EvalTrajectory = Field(..., description="Execution trajectory")
-    score: EvalScore = Field(..., description="Evaluation score")
-    judge_name: str = Field(..., description="Name of the judge that scored this")
 
     class Config:
         frozen = True

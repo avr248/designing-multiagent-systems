@@ -71,12 +71,12 @@ from .agents import (
 # Evaluation system
 from .eval import (
     AgentEvalTarget,
-    BaseEvalRunner,
-    BaseEvalTarget,
+    EvalJudge,
     EvalRunner,
     LLMEvalJudge,
     ModelEvalTarget,
     OrchestratorEvalTarget,
+    Target,
 )
 
 # LLM clients
@@ -257,8 +257,8 @@ __all__ = [
     "StepMetadata",
     "Context",
     # Evaluation
-    "BaseEvalTarget",
-    "BaseEvalRunner",
+    "Target",
+    "EvalJudge",
     "EvalRunner",
     "AgentEvalTarget",
     "ModelEvalTarget",

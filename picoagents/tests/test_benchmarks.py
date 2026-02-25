@@ -1,12 +1,12 @@
 """
-Tests for the benchmark system.
+Tests for the evaluation system (merged from benchmark tests).
 
 Tests cover:
 - AgentConfig creation and serialization
-- BenchmarkTask and BenchmarkDataset
-- BenchmarkResults and comparison utilities
-- BenchmarkMiddleware metrics collection
-- BenchmarkRunner execution
+- Dataset and Task types
+- EvalResults and comparison utilities
+- RunMiddleware metrics collection
+- EvalRunner execution
 - Built-in dataset loading
 - Analysis formatting
 """
@@ -14,21 +14,18 @@ Tests cover:
 import json
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import pytest
 
-from picoagents.eval.benchmarks import (
+from picoagents.eval import (
     AgentConfig,
-    BenchmarkDataset,
-    BenchmarkMiddleware,
-    BenchmarkResults,
-    BenchmarkRunner,
-    BenchmarkTask,
-    BenchmarkTarget,
     CallableTarget,
+    Dataset,
+    EvalResults,
+    EvalRunner,
     PicoAgentTarget,
-    TargetResult,
+    RunMiddleware,
     TargetSummary,
     TaskResult,
     format_file_read_analysis,
@@ -36,10 +33,11 @@ from picoagents.eval.benchmarks import (
     format_task_breakdown,
     list_builtin_datasets,
     load_builtin_dataset,
+    load_eval_results,
 )
-from picoagents.eval._base import BaseEvalJudge
+from picoagents.eval._base import EvalJudge
 from picoagents.messages import AssistantMessage, UserMessage
-from picoagents.types import EvalScore, EvalTask, EvalTrajectory, Usage
+from picoagents.types import EvalScore, RunTrajectory, Task, Usage
 
 
 # =============================================================================
@@ -47,7 +45,7 @@ from picoagents.types import EvalScore, EvalTask, EvalTrajectory, Usage
 # =============================================================================
 
 
-class MockJudge(BaseEvalJudge):
+class MockJudge(EvalJudge):
     """Mock judge that returns configurable scores."""
 
     def __init__(self, score: float = 8.0):
@@ -57,8 +55,8 @@ class MockJudge(BaseEvalJudge):
 
     async def score(
         self,
-        trajectory: EvalTrajectory,
-        criteria: List[str] = None,
+        trajectory: RunTrajectory,
+        criteria: Optional[List[str]] = None,
         cancellation_token=None,
     ) -> EvalScore:
         self.call_count += 1
@@ -75,14 +73,14 @@ class MockJudge(BaseEvalJudge):
 def create_sample_task(
     task_id: str = "test_task",
     name: str = "Test Task",
-    prompt: str = "Do something",
+    input_text: str = "Do something",
     category: str = "general",
-) -> BenchmarkTask:
-    """Create a sample benchmark task for testing."""
-    return BenchmarkTask(
+) -> Task:
+    """Create a sample task for testing."""
+    return Task(
         id=task_id,
         name=name,
-        prompt=prompt,
+        input=input_text,
         category=category,
         eval_criteria=["task_completion", "efficiency"],
         rubric={
@@ -92,23 +90,41 @@ def create_sample_task(
     )
 
 
-def create_sample_dataset(num_tasks: int = 3) -> BenchmarkDataset:
+def create_sample_dataset(num_tasks: int = 3) -> Dataset:
     """Create a sample dataset with multiple tasks."""
     tasks = [
         create_sample_task(
             task_id=f"task_{i}",
             name=f"Test Task {i}",
-            prompt=f"Complete task {i}",
+            input_text=f"Complete task {i}",
             category="test" if i % 2 == 0 else "other",
         )
         for i in range(num_tasks)
     ]
-    return BenchmarkDataset(
+    return Dataset(
         name="test_dataset",
         description="A test dataset",
         version="1.0",
         tasks=tasks,
         default_eval_criteria=["task_completion"],
+    )
+
+
+def create_trajectory_for_task(task: Task, tokens: int = 600) -> RunTrajectory:
+    """Create a RunTrajectory for a given task."""
+    return RunTrajectory(
+        task=task,
+        messages=[
+            UserMessage(content=task.input, source="user"),
+            AssistantMessage(content="Done", source="assistant"),
+        ],
+        success=True,
+        usage=Usage(
+            duration_ms=1000,
+            llm_calls=3,
+            tokens_input=tokens // 2,
+            tokens_output=tokens // 2,
+        ),
     )
 
 
@@ -129,7 +145,7 @@ class TestAgentConfig:
         assert config.model_name == "gpt-4o-mini"
         assert config.compaction is None
         assert config.token_budget == 50_000
-        assert config.max_iterations == 30  # Actual default
+        assert config.max_iterations == 30
 
     def test_full_configuration(self):
         """Test AgentConfig with all parameters."""
@@ -183,59 +199,46 @@ class TestAgentConfig:
         config = AgentConfig.from_string("my_config:strategy=head_tail,budget=80000")
         assert config.name == "my_config"
         assert config.compaction == "head_tail"
-        # Note: budget maps to token_budget
 
 
 # =============================================================================
-# BenchmarkTask Tests
+# Task Tests
 # =============================================================================
 
 
-class TestBenchmarkTask:
-    """Tests for BenchmarkTask dataclass."""
+class TestTask:
+    """Tests for Task type."""
 
     def test_minimal_task(self):
         """Test task with required fields only."""
-        task = BenchmarkTask(
-            id="min_task",
+        task = Task(
             name="Minimal",
-            prompt="Do this",
+            input="Do this",
         )
 
-        assert task.id == "min_task"
+        assert task.name == "Minimal"
         assert task.category == "general"
-        assert task.eval_criteria == ["task_completion"]
+        assert task.eval_criteria == []
+        assert task.id is None
 
-    def test_to_eval_task(self):
-        """Test conversion to EvalTask."""
+    def test_full_task(self):
+        """Test task with all fields."""
         task = create_sample_task()
-        eval_task = task.to_eval_task()
 
-        assert isinstance(eval_task, EvalTask)
-        # EvalTask uses task.id as name
-        assert eval_task.name == task.id
-        assert eval_task.input == task.prompt
-
-    def test_serialization_roundtrip(self):
-        """Test to_dict and from_dict work correctly."""
-        original = create_sample_task()
-
-        data = original.to_dict()
-        restored = BenchmarkTask.from_dict(data)
-
-        assert restored.id == original.id
-        assert restored.name == original.name
-        assert restored.prompt == original.prompt
-        assert restored.eval_criteria == original.eval_criteria
+        assert task.id == "test_task"
+        assert task.name == "Test Task"
+        assert task.input == "Do something"
+        assert task.eval_criteria == ["task_completion", "efficiency"]
+        assert "task_completion" in task.rubric
 
 
 # =============================================================================
-# BenchmarkDataset Tests
+# Dataset Tests
 # =============================================================================
 
 
-class TestBenchmarkDataset:
-    """Tests for BenchmarkDataset."""
+class TestDataset:
+    """Tests for Dataset."""
 
     def test_dataset_creation(self):
         """Test creating a dataset."""
@@ -275,7 +278,7 @@ class TestBenchmarkDataset:
             dataset.to_json(filepath)
             assert filepath.exists()
 
-            loaded = BenchmarkDataset.from_json(filepath)
+            loaded = Dataset.from_json(filepath)
 
             assert loaded.name == dataset.name
             assert len(list(loaded.tasks)) == 3
@@ -304,6 +307,10 @@ class TestBuiltinDatasets:
         assert dataset.name == "coding_v1"
         assert len(list(dataset.tasks)) > 0
 
+        # Verify tasks use 'input' field (not 'prompt')
+        for task in dataset.tasks:
+            assert task.input, f"Task {task.id} has empty input"
+
     def test_load_nonexistent_dataset(self):
         """Test loading a non-existent dataset raises error."""
         with pytest.raises(ValueError, match="not found"):
@@ -321,15 +328,7 @@ class TestTaskResult:
     def test_task_result_creation(self):
         """Test creating a task result."""
         task = create_sample_task()
-        trajectory = EvalTrajectory(
-            task=task.to_eval_task(),
-            messages=[
-                UserMessage(content=task.prompt, source="user"),
-                AssistantMessage(content="Done", source="assistant"),
-            ],
-            success=True,
-            usage=Usage(duration_ms=1000, llm_calls=3, tokens_input=500, tokens_output=100),
-        )
+        trajectory = create_trajectory_for_task(task, tokens=600)
 
         score = EvalScore(
             overall=8.5,
@@ -343,11 +342,6 @@ class TestTaskResult:
             target_name="test_target",
             trajectory=trajectory,
             score=score,
-            total_tokens=600,
-            input_tokens=500,
-            output_tokens=100,
-            iterations=3,
-            duration_ms=1000,
             files_read={"file1.txt": 2, "file2.txt": 1},
             unique_files=2,
             duplicate_reads=1,
@@ -355,17 +349,20 @@ class TestTaskResult:
 
         assert result.task_id == task.id
         assert result.score.overall == 8.5
+        # Token fields read from trajectory.usage
         assert result.total_tokens == 600
+        assert result.input_tokens == 300
+        assert result.output_tokens == 300
         assert result.duplicate_reads == 1
 
 
 # =============================================================================
-# BenchmarkResults Tests
+# EvalResults Tests
 # =============================================================================
 
 
-class TestBenchmarkResults:
-    """Tests for BenchmarkResults."""
+class TestEvalResults:
+    """Tests for EvalResults."""
 
     def _create_mock_result(
         self,
@@ -376,15 +373,7 @@ class TestBenchmarkResults:
     ) -> TaskResult:
         """Create a mock TaskResult."""
         task = create_sample_task(task_id=task_id)
-        trajectory = EvalTrajectory(
-            task=task.to_eval_task(),
-            messages=[
-                UserMessage(content=task.prompt, source="user"),
-                AssistantMessage(content="Done", source="assistant"),
-            ],
-            success=True,
-            usage=Usage(duration_ms=100, llm_calls=1, tokens_input=tokens // 2, tokens_output=tokens // 2),
-        )
+        trajectory = create_trajectory_for_task(task, tokens=tokens)
 
         eval_score = EvalScore(
             overall=score,
@@ -398,11 +387,6 @@ class TestBenchmarkResults:
             target_name=target_name,
             trajectory=trajectory,
             score=eval_score,
-            total_tokens=tokens,
-            input_tokens=tokens // 2,
-            output_tokens=tokens // 2,
-            iterations=5,
-            duration_ms=1000,
             files_read={},
             unique_files=0,
             duplicate_reads=0,
@@ -410,7 +394,7 @@ class TestBenchmarkResults:
 
     def test_add_and_get_results(self):
         """Test adding and retrieving results."""
-        results = BenchmarkResults(dataset_name="test", dataset_version="1.0")
+        results = EvalResults(dataset_name="test", dataset_version="1.0")
 
         result1 = self._create_mock_result("task_1", "target_a")
         result2 = self._create_mock_result("task_1", "target_b")
@@ -429,9 +413,8 @@ class TestBenchmarkResults:
 
     def test_get_summaries(self):
         """Test getting target summaries."""
-        results = BenchmarkResults(dataset_name="test", dataset_version="1.0")
+        results = EvalResults(dataset_name="test", dataset_version="1.0")
 
-        # Add results for two targets
         for task_id in ["task_1", "task_2", "task_3"]:
             results.add_result(self._create_mock_result(task_id, "baseline", tokens=1000))
             results.add_result(self._create_mock_result(task_id, "optimized", tokens=800))
@@ -442,7 +425,7 @@ class TestBenchmarkResults:
         assert "optimized" in summaries
 
         baseline = summaries["baseline"]
-        assert baseline.task_count == 3  # Correct attribute name
+        assert baseline.task_count == 3
         assert baseline.total_tokens == 3000  # 3 * 1000
 
         optimized = summaries["optimized"]
@@ -450,7 +433,7 @@ class TestBenchmarkResults:
 
     def test_compare_targets(self):
         """Test target comparison."""
-        results = BenchmarkResults(dataset_name="test", dataset_version="1.0")
+        results = EvalResults(dataset_name="test", dataset_version="1.0")
 
         for task_id in ["task_1", "task_2"]:
             results.add_result(self._create_mock_result(task_id, "baseline", tokens=1000, score=7.0))
@@ -468,7 +451,7 @@ class TestBenchmarkResults:
 
     def test_save_and_load(self):
         """Test saving and loading results."""
-        results = BenchmarkResults(dataset_name="test", dataset_version="1.0")
+        results = EvalResults(dataset_name="test", dataset_version="1.0")
         results.add_result(self._create_mock_result("task_1", "target_a"))
         results.add_result(self._create_mock_result("task_2", "target_a"))
 
@@ -478,10 +461,7 @@ class TestBenchmarkResults:
             results.save(filepath)
             assert filepath.exists()
 
-            # Load and verify
-            from picoagents.eval.benchmarks import load_benchmark_results
-
-            loaded = load_benchmark_results(filepath)
+            loaded = load_eval_results(filepath)
 
             assert loaded.dataset_name == "test"
             assert len(loaded.target_names) == 1
@@ -489,16 +469,16 @@ class TestBenchmarkResults:
 
 
 # =============================================================================
-# BenchmarkMiddleware Tests
+# RunMiddleware Tests
 # =============================================================================
 
 
-class TestBenchmarkMiddleware:
-    """Tests for BenchmarkMiddleware."""
+class TestRunMiddleware:
+    """Tests for RunMiddleware."""
 
     def test_initial_state(self):
         """Test middleware initial state."""
-        middleware = BenchmarkMiddleware()
+        middleware = RunMiddleware()
 
         metrics = middleware.get_metrics()
         assert metrics["iterations"] == 0
@@ -508,7 +488,7 @@ class TestBenchmarkMiddleware:
 
     def test_record_compaction(self):
         """Test recording compaction events."""
-        middleware = BenchmarkMiddleware()
+        middleware = RunMiddleware()
 
         middleware.record_compaction(
             tokens_before=10000,
@@ -523,7 +503,7 @@ class TestBenchmarkMiddleware:
 
     def test_reset(self):
         """Test resetting middleware state."""
-        middleware = BenchmarkMiddleware()
+        middleware = RunMiddleware()
 
         middleware.record_compaction(10000, 5000, 50, 25)
 
@@ -535,7 +515,7 @@ class TestBenchmarkMiddleware:
 
 
 # =============================================================================
-# BenchmarkTarget Tests
+# CallableTarget Tests
 # =============================================================================
 
 
@@ -546,14 +526,20 @@ class TestCallableTarget:
     async def test_callable_target(self):
         """Test running a callable target."""
 
-        async def my_runner(task: BenchmarkTask) -> TargetResult:
-            return TargetResult(
-                output=f"Completed: {task.name}",
+        async def my_runner(task: Task) -> RunTrajectory:
+            return RunTrajectory(
+                task=task,
+                messages=[
+                    UserMessage(content=task.input, source="user"),
+                    AssistantMessage(content=f"Completed: {task.name}", source="assistant"),
+                ],
                 success=True,
-                input_tokens=250,
-                output_tokens=250,
-                iterations=3,
-                duration_ms=100,
+                usage=Usage(
+                    duration_ms=100,
+                    llm_calls=3,
+                    tokens_input=250,
+                    tokens_output=250,
+                ),
             )
 
         target = CallableTarget(name="my_target", func=my_runner)
@@ -562,32 +548,36 @@ class TestCallableTarget:
         result = await target.run(task)
 
         assert result.success is True
-        assert "Completed" in result.output
-        assert result.total_tokens == 500
+        assert "Completed" in result.messages[-1].content
 
 
 # =============================================================================
-# BenchmarkRunner Tests
+# EvalRunner Tests
 # =============================================================================
 
 
-class TestBenchmarkRunner:
-    """Tests for BenchmarkRunner."""
+class TestEvalRunner:
+    """Tests for EvalRunner."""
 
     @pytest.mark.asyncio
     async def test_runner_basic(self):
-        """Test running a basic benchmark."""
+        """Test running a basic evaluation."""
         judge = MockJudge(score=8.0)
 
-        # Create a simple callable target
-        async def simple_runner(task: BenchmarkTask) -> TargetResult:
-            return TargetResult(
-                output="Done",
+        async def simple_runner(task: Task) -> RunTrajectory:
+            return RunTrajectory(
+                task=task,
+                messages=[
+                    UserMessage(content=task.input, source="user"),
+                    AssistantMessage(content="Done", source="assistant"),
+                ],
                 success=True,
-                input_tokens=250,
-                output_tokens=250,
-                iterations=3,
-                duration_ms=100,
+                usage=Usage(
+                    duration_ms=100,
+                    llm_calls=3,
+                    tokens_input=250,
+                    tokens_output=250,
+                ),
             )
 
         targets = [
@@ -595,7 +585,7 @@ class TestBenchmarkRunner:
         ]
 
         dataset = create_sample_dataset(2)
-        runner = BenchmarkRunner(judge=judge)
+        runner = EvalRunner(judge=judge)
 
         results = await runner.run(dataset, targets)
 
@@ -610,13 +600,21 @@ class TestBenchmarkRunner:
         """Test running with task filter."""
         judge = MockJudge()
 
-        async def simple_runner(task: BenchmarkTask) -> TargetResult:
-            return TargetResult(output="Done", success=True, input_tokens=50, output_tokens=50, iterations=1, duration_ms=50)
+        async def simple_runner(task: Task) -> RunTrajectory:
+            return RunTrajectory(
+                task=task,
+                messages=[
+                    UserMessage(content=task.input, source="user"),
+                    AssistantMessage(content="Done", source="assistant"),
+                ],
+                success=True,
+                usage=Usage(duration_ms=50, llm_calls=1, tokens_input=50, tokens_output=50),
+            )
 
         targets = [CallableTarget(name="test", func=simple_runner)]
         dataset = create_sample_dataset(6)  # 3 "test" category, 3 "other"
 
-        runner = BenchmarkRunner(judge=judge)
+        runner = EvalRunner(judge=judge)
 
         # Filter to only "test" category
         results = await runner.run(
@@ -636,21 +634,12 @@ class TestBenchmarkRunner:
 class TestAnalysisFormatting:
     """Tests for analysis formatting functions."""
 
-    def _create_results_with_data(self) -> BenchmarkResults:
+    def _create_results_with_data(self) -> EvalResults:
         """Create results with test data."""
-        results = BenchmarkResults(dataset_name="test", dataset_version="1.0")
+        results = EvalResults(dataset_name="test", dataset_version="1.0")
 
-        # Create sample trajectory and score
         task = create_sample_task()
-        trajectory = EvalTrajectory(
-            task=task.to_eval_task(),
-            messages=[
-                UserMessage(content=task.prompt, source="user"),
-                AssistantMessage(content="Done", source="assistant"),
-            ],
-            success=True,
-            usage=Usage(duration_ms=1000, llm_calls=5, tokens_input=500, tokens_output=100),
-        )
+        trajectory = create_trajectory_for_task(task, tokens=600)
 
         score = EvalScore(
             overall=8.0,
@@ -659,18 +648,13 @@ class TestAnalysisFormatting:
             trajectory=trajectory,
         )
 
-        # Add results for two targets
         for target_name, tokens in [("baseline", 1000), ("optimized", 700)]:
+            t = create_trajectory_for_task(task, tokens=tokens)
             result = TaskResult(
                 task_id=task.id,
                 target_name=target_name,
-                trajectory=trajectory,
+                trajectory=t,
                 score=score,
-                total_tokens=tokens,
-                input_tokens=tokens // 2,
-                output_tokens=tokens // 2,
-                iterations=5,
-                duration_ms=1000,
                 files_read={"file1.txt": 2, "file2.txt": 1},
                 unique_files=2,
                 duplicate_reads=1,
@@ -715,40 +699,36 @@ class TestAnalysisFormatting:
 # =============================================================================
 
 
-class TestBenchmarkIntegration:
-    """Integration tests for the benchmark system."""
+class TestEvalIntegration:
+    """Integration tests for the evaluation system."""
 
     @pytest.mark.asyncio
-    async def test_full_benchmark_flow(self):
-        """Test complete benchmark workflow."""
-        # 1. Create configurations
-        configs = [
-            AgentConfig(name="baseline", compaction=None),
-            AgentConfig(name="head_tail", compaction="head_tail"),
-        ]
-
-        # 2. Create dataset
+    async def test_full_eval_flow(self):
+        """Test complete evaluation workflow."""
+        # 1. Create dataset
         dataset = create_sample_dataset(3)
 
-        # 3. Create mock targets (simulate different behavior)
-        async def baseline_runner(task: BenchmarkTask) -> TargetResult:
-            return TargetResult(
-                output=f"Baseline: {task.name}",
+        # 2. Create mock targets (simulate different behavior)
+        async def baseline_runner(task: Task) -> RunTrajectory:
+            return RunTrajectory(
+                task=task,
+                messages=[
+                    UserMessage(content=task.input, source="user"),
+                    AssistantMessage(content=f"Baseline: {task.name}", source="assistant"),
+                ],
                 success=True,
-                input_tokens=500,
-                output_tokens=500,
-                iterations=10,
-                duration_ms=500,
+                usage=Usage(duration_ms=500, llm_calls=10, tokens_input=500, tokens_output=500),
             )
 
-        async def optimized_runner(task: BenchmarkTask) -> TargetResult:
-            return TargetResult(
-                output=f"Optimized: {task.name}",
+        async def optimized_runner(task: Task) -> RunTrajectory:
+            return RunTrajectory(
+                task=task,
+                messages=[
+                    UserMessage(content=task.input, source="user"),
+                    AssistantMessage(content=f"Optimized: {task.name}", source="assistant"),
+                ],
                 success=True,
-                input_tokens=300,
-                output_tokens=300,
-                iterations=6,
-                duration_ms=300,
+                usage=Usage(duration_ms=300, llm_calls=6, tokens_input=300, tokens_output=300),
             )
 
         targets = [
@@ -756,13 +736,13 @@ class TestBenchmarkIntegration:
             CallableTarget(name="head_tail", func=optimized_runner),
         ]
 
-        # 4. Run benchmark
+        # 3. Run evaluation
         judge = MockJudge(score=8.0)
-        runner = BenchmarkRunner(judge=judge)
+        runner = EvalRunner(judge=judge)
 
         results = await runner.run(dataset, targets)
 
-        # 5. Verify results
+        # 4. Verify results
         assert len(results.target_names) == 2
         assert len(results.task_ids) == 3
 
@@ -770,18 +750,16 @@ class TestBenchmarkIntegration:
         assert summaries["baseline"].total_tokens == 3000  # 3 * 1000
         assert summaries["head_tail"].total_tokens == 1800  # 3 * 600
 
-        # 6. Compare targets
+        # 5. Compare targets
         comparison = results.compare_targets("baseline")
         assert comparison["head_tail"]["token_diff_pct"] == pytest.approx(-40.0)
 
-        # 7. Test saving and loading
+        # 6. Test saving and loading
         with tempfile.TemporaryDirectory() as tmpdir:
             filepath = Path(tmpdir) / "results.json"
             results.save(filepath)
 
-            from picoagents.eval.benchmarks import load_benchmark_results
-
-            loaded = load_benchmark_results(filepath)
+            loaded = load_eval_results(filepath)
             assert loaded.dataset_name == results.dataset_name
             assert len(loaded.target_names) == 2
 

@@ -147,6 +147,11 @@ Be decisive: if you can see the answer, provide it immediately!"""
             await self.interface_client.initialize()
             self.is_initialized = True
 
+        # Resolve the working context so we can inject screenshots into it.
+        # Parent's run_stream() uses this same object as its working_context
+        # when an explicit context is passed, keeping everything in sync.
+        working_context = context if context else self.context.model_copy(deep=True)
+
         # Capture initial screenshot for UI display
         initial_state = await self.interface_client.get_state("hybrid")
         if initial_state.screenshot:
@@ -162,7 +167,7 @@ Be decisive: if you can see the answer, provide it immediately!"""
         # Use base Agent's run_stream but intercept tool events for screenshots and task completion
         async for item in super().run_stream(
             task=task,
-            context=context,
+            context=working_context,
             cancellation_token=cancellation_token,
             verbose=verbose,
             stream_tokens=stream_tokens,
@@ -184,7 +189,7 @@ Be decisive: if you can see the answer, provide it immediately!"""
                                 data=state.screenshot,
                                 media_url=None,
                             )
-                            self.context.add_message(screenshot_msg)
+                            working_context.add_message(screenshot_msg)
                             # Also yield for UI display
                             yield screenshot_msg
                     except Exception:

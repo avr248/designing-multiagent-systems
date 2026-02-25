@@ -1,39 +1,47 @@
 """
 Base classes for the evaluation system.
 
-This module defines the abstract base classes that all evaluation components inherit from.
+This module defines the abstract base classes: Target (what we run tasks against)
+and EvalJudge (what scores the results).
 """
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from .._cancellation_token import CancellationToken
-from ..types import EvalScore, EvalTask, EvalTrajectory
+from ..types import EvalScore, RunTrajectory, Task
 
 
-class BaseEvalTarget(ABC):
-    """Abstract base class for anything that can be evaluated."""
+class Target(ABC):
+    """Abstract base class for anything that can run tasks.
+
+    A target wraps a system under test (agent, model, orchestrator, etc.)
+    and provides a uniform interface: give it a Task, get back a RunTrajectory.
+    """
 
     def __init__(self, name: str):
         self.name = name
 
     @abstractmethod
     async def run(
-        self, task: EvalTask, cancellation_token: Optional[CancellationToken] = None
-    ) -> EvalTrajectory:
+        self, task: Task, cancellation_token: Optional[CancellationToken] = None
+    ) -> RunTrajectory:
         """Execute the task and return the complete trajectory.
 
         Args:
-            task: The evaluation task to execute
+            task: The task to execute
             cancellation_token: Optional token to cancel execution
 
         Returns:
-            EvalTrajectory containing the complete execution sequence
+            RunTrajectory containing the complete execution sequence
         """
         pass
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(name={self.name!r})"
 
-class BaseEvalJudge(ABC):
+
+class EvalJudge(ABC):
     """Abstract base class for evaluation judges."""
 
     def __init__(self, name: str):
@@ -42,46 +50,20 @@ class BaseEvalJudge(ABC):
     @abstractmethod
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:
-        """Score an evaluation trajectory.
+        """Score a run trajectory.
 
         Args:
             trajectory: The execution trajectory to score
-            criteria: Optional list of evaluation dimensions to score
+            criteria: Optional list of evaluation dimensions to score.
+                      If not provided, uses trajectory.task.eval_criteria,
+                      falling back to generic defaults.
             cancellation_token: Optional token to cancel scoring
 
         Returns:
             EvalScore with overall and dimensional scores
-        """
-        pass
-
-
-class BaseEvalRunner(ABC):
-    """Abstract base class for evaluation runners."""
-
-    def __init__(self, judge: BaseEvalJudge):
-        self.judge = judge
-
-    @abstractmethod
-    async def evaluate(
-        self,
-        target: BaseEvalTarget,
-        tasks: List[EvalTask],
-        criteria: Optional[List[str]] = None,
-        cancellation_token: Optional[CancellationToken] = None,
-    ) -> List[EvalScore]:
-        """Evaluate a target on multiple tasks.
-
-        Args:
-            target: The evaluation target to test
-            tasks: List of tasks to evaluate
-            criteria: Optional evaluation criteria
-            cancellation_token: Optional token to cancel evaluation
-
-        Returns:
-            List of evaluation scores, one per task
         """
         pass

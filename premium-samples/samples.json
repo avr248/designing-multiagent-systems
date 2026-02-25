@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated": "2025-11-10",
+  "updated": "2026-02-25",
   "samples": [
     {
       "id": "yc-analysis-app",
@@ -8,15 +8,40 @@
       "description": "Production-ready application that analyzes 5,622 Y Combinator companies to identify AI agent trends. Features a 4-stage workflow with 90% cost optimization, real-time streaming progress, and an interactive dashboard for exploring results.",
       "tier": "professional",
       "status": "available",
-      "tags": ["workflows", "fastapi", "react", "sse", "production", "cost-optimization"],
+      "tags": [
+        "workflows",
+        "fastapi",
+        "react",
+        "sse",
+        "production",
+        "cost-optimization"
+      ],
       "difficulty": "intermediate",
-      "chapters": [5, 6, 13],
+      "chapters": [
+        5,
+        6,
+        13
+      ],
       "github_url": "https://github.com/victordibia/designing-multiagent-systems/tree/main/premium-samples/yc-analysis-app",
       "screenshot": "yc-analysis-app/screenshot.jpg",
       "tech_stack": {
-        "backend": ["Python 3.11+", "FastAPI", "PicoAgents", "Server-Sent Events"],
-        "frontend": ["React 19", "TypeScript", "Vite", "Tailwind CSS v4", "shadcn/ui"],
-        "deployment": ["Docker", "Docker Compose"]
+        "backend": [
+          "Python 3.11+",
+          "FastAPI",
+          "PicoAgents",
+          "Server-Sent Events"
+        ],
+        "frontend": [
+          "React 19",
+          "TypeScript",
+          "Vite",
+          "Tailwind CSS v4",
+          "shadcn/ui"
+        ],
+        "deployment": [
+          "Docker",
+          "Docker Compose"
+        ]
       },
       "features": [
         "Demonstrates a 4-stage workflow pattern: Load → Filter → Classify → Analyze",
@@ -45,10 +70,82 @@
         "500_companies": "$1.50",
         "full_dataset": "$15.00"
       },
-      "size_mb": 0.13,
+      "size_mb": 0.09,
       "setup_time_minutes": 5,
       "demo_video_url": null,
       "docs_url": "https://github.com/victordibia/designing-multiagent-systems/blob/main/premium-samples/yc-analysis-app/README.md"
+    },
+    {
+      "id": "reelcut",
+      "title": "ReelCut",
+      "description": "AI-powered video analysis, search, and editing application. Import videos, transcribe with Whisper, search transcripts with text or natural language, create cut lists, export trimmed videos, translate transcripts, and chat with video content via an AI agent.",
+      "tier": "professional",
+      "status": "available",
+      "tags": [
+        "agents",
+        "tools",
+        "fastapi",
+        "react",
+        "sse",
+        "video",
+        "whisper",
+        "production"
+      ],
+      "difficulty": "intermediate",
+      "chapters": [
+        4,
+        5,
+        13
+      ],
+      "github_url": "https://github.com/victordibia/designing-multiagent-systems/tree/main/premium-samples/reelcut",
+      "screenshot": "reelcut/screenshot.jpg",
+      "tech_stack": {
+        "backend": [
+          "Python 3.11+",
+          "FastAPI",
+          "Whisper",
+          "FFmpeg",
+          "Server-Sent Events"
+        ],
+        "frontend": [
+          "React",
+          "TypeScript",
+          "Vite",
+          "Tailwind CSS"
+        ],
+        "deployment": [
+          "Docker",
+          "Docker Compose"
+        ]
+      },
+      "features": [
+        "AI agent with tool loop for chatting with video content",
+        "Whisper-based video transcription",
+        "Text and natural language transcript search",
+        "Cut list creation and FFmpeg video export",
+        "LLM-based transcript translation",
+        "Real-time streaming with Server-Sent Events",
+        "CLI and web UI interfaces",
+        "Docker deployment"
+      ],
+      "key_concepts": [
+        "AI agent with tools pattern",
+        "Provider-agnostic LLM abstraction",
+        "Video processing pipeline",
+        "Streaming architecture",
+        "CLI and web UI integration"
+      ],
+      "use_cases": [
+        "Video content analysis and search",
+        "Automated video editing and highlights",
+        "Transcript-based video navigation",
+        "Multi-language transcript translation"
+      ],
+      "estimated_cost": null,
+      "size_mb": 0.93,
+      "setup_time_minutes": 5,
+      "demo_video_url": null,
+      "docs_url": "https://github.com/victordibia/designing-multiagent-systems/blob/main/premium-samples/reelcut/README.md"
     }
   ]
 }

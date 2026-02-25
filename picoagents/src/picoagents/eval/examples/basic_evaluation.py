@@ -9,7 +9,7 @@ import os
 
 from picoagents import Agent, OpenAIChatCompletionClient
 from picoagents.eval import AgentEvalTarget, EvalRunner, LLMEvalJudge, ModelEvalTarget
-from picoagents.types import EvalTask
+from picoagents.types import Task
 
 
 async def main():
@@ -28,13 +28,13 @@ async def main():
 
     # Create evaluation tasks
     tasks = [
-        EvalTask(name="Math Problem", input="What is 25 * 16?", expected_output="400"),
-        EvalTask(
+        Task(name="Math Problem", input="What is 25 * 16?", expected_output="400"),
+        Task(
             name="Capital City",
             input="What is the capital of France?",
             expected_output="Paris",
         ),
-        EvalTask(
+        Task(
             name="Creative Writing",
             input="Write a haiku about programming.",
             expected_output="A creative haiku about programming",
@@ -76,7 +76,7 @@ async def main():
     print(f"👨‍⚖️  Created judge: {judge.name}")
 
     # Create evaluation runner
-    runner = EvalRunner(judge=judge, parallel=True)
+    runner = EvalRunner(judge=judge, parallel_tasks=True)
 
     print(f"🏃 Created runner with parallel execution")
 

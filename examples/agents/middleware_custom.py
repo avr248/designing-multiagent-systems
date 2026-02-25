@@ -555,19 +555,26 @@ async def demo_context_management():
 
     print(f"Running {len(queries)} queries to demonstrate context trimming:\n")
 
+    # Thread context across calls for multi-turn conversation.
+    # Each run() returns an AgentResponse whose .context holds the
+    # accumulated conversation. Pass it to the next call to continue.
+    conversation_context = None
+
     for i, query in enumerate(queries):
+        msg_count = conversation_context.message_count if conversation_context else 0
         print(f"🌤️  Query {i+1}: {query}")
-        print(f"   Context size before: {agent.context.message_count} messages")
+        print(f"   Context size before: {msg_count} messages")
 
         try:
-            result = await agent.run(query)
+            result = await agent.run(query, context=conversation_context)
+            conversation_context = result.context
             response_preview = (
                 result.messages[-1].content[:100] + "..."
                 if len(result.messages[-1].content) > 100
                 else result.messages[-1].content
             )
             print(f"   Response: {response_preview}")
-            print(f"   Context size after: {agent.context.message_count} messages")
+            print(f"   Context size after: {conversation_context.message_count} messages")
         except Exception as e:
             print(f"   ❌ Error: {str(e)[:100]}...")
 

@@ -25,7 +25,7 @@ from picoagents.eval import (
 )
 from picoagents.llm import BaseChatCompletionClient
 from picoagents.messages import AssistantMessage, ToolMessage, UserMessage
-from picoagents.types import ChatCompletionResult, EvalTask, EvalTrajectory, Usage
+from picoagents.types import ChatCompletionResult, Task, RunTrajectory, Usage
 
 
 class MockChatCompletionClient(BaseChatCompletionClient):
@@ -61,10 +61,10 @@ class MockChatCompletionClient(BaseChatCompletionClient):
 
 
 def create_test_trajectory(
-    task: EvalTask, messages: List, success: bool = True, error: str | None = None
-) -> EvalTrajectory:
+    task: Task, messages: List, success: bool = True, error: str | None = None
+) -> RunTrajectory:
     """Helper to create test trajectories."""
-    return EvalTrajectory(
+    return RunTrajectory(
         task=task,
         messages=messages,
         success=success,
@@ -79,7 +79,7 @@ async def test_exact_match_judge_success():
     """Test ExactMatchJudge with matching answer."""
     judge = ExactMatchJudge()
 
-    task = EvalTask(name="Math", input="What is 2 + 2?", expected_output="4")
+    task = Task(name="Math", input="What is 2 + 2?", expected_output="4")
 
     trajectory = create_test_trajectory(
         task,
@@ -101,7 +101,7 @@ async def test_exact_match_judge_failure():
     """Test ExactMatchJudge with non-matching answer."""
     judge = ExactMatchJudge()
 
-    task = EvalTask(name="Math", input="What is 2 + 2?", expected_output="4")
+    task = Task(name="Math", input="What is 2 + 2?", expected_output="4")
 
     trajectory = create_test_trajectory(
         task,
@@ -123,7 +123,7 @@ async def test_exact_match_case_insensitive():
     """Test ExactMatchJudge case insensitivity."""
     judge = ExactMatchJudge(case_sensitive=False)
 
-    task = EvalTask(name="Capital", input="Capital of France?", expected_output="paris")
+    task = Task(name="Capital", input="Capital of France?", expected_output="paris")
 
     trajectory = create_test_trajectory(
         task,
@@ -144,7 +144,7 @@ async def test_answer_extraction_last_non_empty():
     """Test last_non_empty extraction strategy."""
     judge = ExactMatchJudge(answer_strategy="last_non_empty")
 
-    task = EvalTask(name="Test", input="Question", expected_output="42")
+    task = Task(name="Test", input="Question", expected_output="42")
 
     trajectory = create_test_trajectory(
         task,
@@ -165,7 +165,7 @@ async def test_answer_extraction_last_assistant():
     """Test last_assistant extraction strategy (skips tool results)."""
     judge = ExactMatchJudge(answer_strategy="last_assistant")
 
-    task = EvalTask(name="Tool Task", input="Use tool", expected_output="Result")
+    task = Task(name="Tool Task", input="Use tool", expected_output="Result")
 
     trajectory = create_test_trajectory(
         task,
@@ -192,7 +192,7 @@ async def test_fuzzy_match_judge():
     """Test FuzzyMatchJudge with similar strings."""
     judge = FuzzyMatchJudge(threshold=0.8)
 
-    task = EvalTask(
+    task = Task(
         name="Description",
         input="Describe Paris",
         expected_output="Paris is the capital of France",
@@ -219,7 +219,7 @@ async def test_contains_judge_success():
     """Test ContainsJudge when expected is in response."""
     judge = ContainsJudge()
 
-    task = EvalTask(
+    task = Task(
         name="Capital", input="What is the capital of France?", expected_output="Paris"
     )
 
@@ -245,7 +245,7 @@ async def test_contains_judge_failure():
     """Test ContainsJudge when expected is not in response."""
     judge = ContainsJudge()
 
-    task = EvalTask(
+    task = Task(
         name="Capital", input="What is the capital of France?", expected_output="Paris"
     )
 
@@ -271,7 +271,7 @@ async def test_composite_judge():
 
     composite = CompositeJudge([(exact_judge, 0.7), (contains_judge, 0.3)])
 
-    task = EvalTask(name="Test", input="Question", expected_output="Answer")
+    task = Task(name="Test", input="Question", expected_output="Answer")
 
     trajectory = create_test_trajectory(
         task,
@@ -299,7 +299,7 @@ async def test_composite_judge_normalization():
     # Weights don't sum to 1.0, but normalization is on
     composite = CompositeJudge([(judge1, 2.0), (judge2, 3.0)], normalize_weights=True)
 
-    task = EvalTask(name="Test", input="Question", expected_output="Answer")
+    task = Task(name="Test", input="Question", expected_output="Answer")
 
     trajectory = create_test_trajectory(
         task,
@@ -321,7 +321,7 @@ async def test_judge_with_failed_trajectory():
     """Test judges handle failed trajectories gracefully."""
     judge = ExactMatchJudge()
 
-    task = EvalTask(name="Test", input="Question", expected_output="Answer")
+    task = Task(name="Test", input="Question", expected_output="Answer")
 
     trajectory = create_test_trajectory(
         task, messages=[], success=False, error="Execution failed"
@@ -338,7 +338,7 @@ async def test_judge_missing_expected_output():
     """Test judges raise error when expected_output is missing."""
     judge = ExactMatchJudge()
 
-    task = EvalTask(
+    task = Task(
         name="Test",
         input="Question",
         expected_output=None,
@@ -370,11 +370,11 @@ async def test_eval_runner_with_agent():
 
     target = AgentEvalTarget(agent)
     judge = ExactMatchJudge()
-    runner = EvalRunner(judge, parallel=False)
+    runner = EvalRunner(judge, parallel_tasks=False)
 
     tasks = [
-        EvalTask(name="Math1", input="2+2", expected_output="4"),
-        EvalTask(
+        Task(name="Math1", input="2+2", expected_output="4"),
+        Task(
             name="Math2", input="3+3", expected_output="6"
         ),  # Correct answer for 3+3
     ]
@@ -391,7 +391,7 @@ async def test_answer_extraction_all_assistant():
     """Test all_assistant extraction (concatenates all AssistantMessages)."""
     judge = ExactMatchJudge(answer_strategy="all_assistant")
 
-    task = EvalTask(
+    task = Task(
         name="Multi-turn",
         input="Tell me about Paris",
         expected_output="Paris is the capital of France.\nIt is beautiful.",  # Newline separator

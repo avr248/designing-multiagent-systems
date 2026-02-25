@@ -9,7 +9,7 @@ import asyncio
 from typing import Dict, List, Optional, Tuple
 
 from ..._cancellation_token import CancellationToken
-from ...types import EvalScore, EvalTrajectory
+from ...types import EvalScore, RunTrajectory
 from ._base import BaseEvalJudge
 
 
@@ -67,7 +67,7 @@ class CompositeJudge(BaseEvalJudge):
 
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:

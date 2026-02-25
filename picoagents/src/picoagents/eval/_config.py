@@ -1,21 +1,18 @@
 """
-Agent configuration for benchmarking.
+Agent configuration for evaluation.
 
 This module defines AgentConfig - a complete specification of how to set up
-an agent for benchmark comparison. Configurations can be defined in code or
-loaded from JSON files.
+an agent for evaluation comparison.
 """
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
-
-from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class AgentConfig:
-    """Complete agent configuration for benchmarking.
+    """Complete agent configuration for evaluation.
 
     An AgentConfig specifies all the knobs that can be tuned when comparing
     agent performance: model, compaction strategy, system prompt, tools, etc.
@@ -45,7 +42,7 @@ class AgentConfig:
 
     # Agent behavior
     system_prompt: str = "You are a helpful assistant."
-    instruction_preset: Optional[str] = None  # "general" - uses get_instructions() with dynamic tool guide
+    instruction_preset: Optional[str] = None  # "general" - uses get_instructions()
     tools: List[str] = field(default_factory=lambda: ["coding"])
     max_iterations: int = 30
 
@@ -53,8 +50,8 @@ class AgentConfig:
     temperature: float = 0.0
 
     # Tool configuration
-    workspace: Optional[str] = None  # Root directory for file tools (default: cwd)
-    bash_timeout: int = 300  # 5 min timeout for bash (git clone, npm install, test suites, builds)
+    workspace: Optional[str] = None  # Root directory for file tools
+    bash_timeout: int = 300  # 5 min timeout for bash
 
     # Additional kwargs passed to agent constructor
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -110,7 +107,6 @@ class AgentConfig:
             ... )
         """
         if ":" not in config_str:
-            # Just a name, use defaults
             return cls(name=config_str)
 
         name, params_str = config_str.split(":", 1)
@@ -129,7 +125,7 @@ class AgentConfig:
             elif key in ("temperature", "head_ratio"):
                 params[key] = float(value)
             elif key == "tools":
-                params[key] = value.split("+")  # e.g., "coding+research"
+                params[key] = value.split("+")
             elif key == "strategy":
                 params["compaction"] = value if value != "none" else None
             elif key == "model":
@@ -144,17 +140,15 @@ class AgentConfig:
     def _create_model_client(self):
         """Create appropriate model client based on provider."""
         if self.model_provider == "openai":
-            from ...llm import OpenAIChatCompletionClient
+            from ..llm import OpenAIChatCompletionClient
 
             return OpenAIChatCompletionClient(
                 model=self.model_name,
             )
         elif self.model_provider == "azure":
-            from ...llm import AzureOpenAIChatCompletionClient
+            from ..llm import AzureOpenAIChatCompletionClient
             import os
 
-            # Note: Some Azure models (e.g., gpt-5.2-chat) don't support
-            # temperature != 1.0. Only pass it if explicitly set to non-zero.
             temp = self.temperature if self.temperature > 0 else None
             return AzureOpenAIChatCompletionClient(
                 azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
@@ -164,7 +158,7 @@ class AgentConfig:
                 temperature=temp,
             )
         elif self.model_provider == "anthropic":
-            from ...llm import AnthropicChatCompletionClient
+            from ..llm import AnthropicChatCompletionClient
             import os
 
             return AnthropicChatCompletionClient(
@@ -177,18 +171,18 @@ class AgentConfig:
     def _create_compaction(self):
         """Create compaction strategy based on configuration."""
         if self.compaction is None or self.compaction == "none":
-            from ...compaction import NoCompaction
+            from ..compaction import NoCompaction
 
             return NoCompaction()
         elif self.compaction == "head_tail":
-            from ...compaction import HeadTailCompaction
+            from ..compaction import HeadTailCompaction
 
             return HeadTailCompaction(
                 token_budget=self.token_budget,
                 head_ratio=self.head_ratio,
             )
         elif self.compaction == "sliding":
-            from ...compaction import SlidingWindowCompaction
+            from ..compaction import SlidingWindowCompaction
 
             return SlidingWindowCompaction(
                 token_budget=self.token_budget,
@@ -198,7 +192,7 @@ class AgentConfig:
 
     def _create_tools(self):
         """Create tools based on configuration."""
-        from ...tools import create_coding_tools, create_core_tools
+        from ..tools import create_coding_tools, create_core_tools
 
         workspace = Path(self.workspace) if self.workspace else None
         all_tools = []
@@ -211,7 +205,6 @@ class AgentConfig:
                 ))
             elif tool_category == "core":
                 all_tools.extend(create_core_tools())
-            # Add more categories as needed
 
         return all_tools
 
@@ -224,7 +217,7 @@ class AgentConfig:
         Returns:
             Configured Agent instance.
         """
-        from ...agents import Agent
+        from ..agents import Agent
 
         model_client = self._create_model_client()
         compaction = self._create_compaction()
@@ -232,7 +225,7 @@ class AgentConfig:
 
         # Resolve instructions: preset takes priority over raw system_prompt
         if self.instruction_preset:
-            from ..._instructions import get_instructions
+            from .._instructions import get_instructions
 
             tool_names = [t.name for t in tools]
             instructions = get_instructions(
@@ -244,7 +237,7 @@ class AgentConfig:
 
         return Agent(
             name=self.name,
-            description=f"Benchmark agent: {self.name}",
+            description=f"Eval agent: {self.name}",
             instructions=instructions,
             model_client=model_client,
             tools=tools,

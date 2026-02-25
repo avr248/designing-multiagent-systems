@@ -1,45 +1,34 @@
 """
-Benchmark analysis utilities.
+Evaluation analysis utilities.
 
-This module provides functions for analyzing and displaying benchmark results.
+This module provides functions for analyzing and displaying evaluation results.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from ._results import BenchmarkResults, TargetSummary
+from ._results import EvalResults, TargetSummary
 
 
-def format_summary_table(results: BenchmarkResults, baseline: Optional[str] = None) -> str:
-    """Format results as a summary table.
-
-    Args:
-        results: Benchmark results
-        baseline: Target name to use as baseline for comparison
-
-    Returns:
-        Formatted table string
-    """
+def format_summary_table(results: EvalResults, baseline: Optional[str] = None) -> str:
+    """Format results as a summary table."""
     summaries = results.get_summaries()
     comparison = results.compare_targets(baseline)
 
     if not summaries:
         return "No results to display."
 
-    # Header
     lines = [
-        f"Benchmark: {results.dataset_name} ({len(results.task_ids)} tasks)",
+        f"Evaluation: {results.dataset_name} ({len(results.task_ids)} tasks)",
         f"Run ID: {results.run_id}",
         f"Date: {results.timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 80,
         "",
     ]
 
-    # Column headers
     header = f"{'Target':<20} {'Score':>8} {'Tokens':>12} {'Iters':>8} {'Duration':>10} {'Files':>8} {'Dupes':>8}"
     lines.append(header)
     lines.append("-" * 80)
 
-    # Data rows
     for target_name in results.target_names:
         summary = summaries.get(target_name)
         if not summary:
@@ -47,7 +36,6 @@ def format_summary_table(results: BenchmarkResults, baseline: Optional[str] = No
 
         comp = comparison.get(target_name, {})
 
-        # Format values
         score_str = f"{summary.avg_score:.1f}"
         tokens_str = f"{summary.total_tokens:,}"
         iters_str = f"{summary.total_iterations}"
@@ -55,7 +43,6 @@ def format_summary_table(results: BenchmarkResults, baseline: Optional[str] = No
         files_str = f"{summary.total_unique_files}"
         dupes_str = f"{summary.total_duplicate_reads}"
 
-        # Add comparison delta for non-baseline
         if not comp.get("is_baseline", False):
             token_pct = comp.get("token_diff_pct", 0)
             if token_pct != 0:
@@ -66,7 +53,6 @@ def format_summary_table(results: BenchmarkResults, baseline: Optional[str] = No
 
     lines.append("")
 
-    # Comparison summary
     if baseline and len(results.target_names) > 1:
         lines.append("vs " + (baseline or results.target_names[0]) + ":")
         for target_name in results.target_names:
@@ -88,22 +74,14 @@ def format_summary_table(results: BenchmarkResults, baseline: Optional[str] = No
     return "\n".join(lines)
 
 
-def format_task_breakdown(results: BenchmarkResults) -> str:
-    """Format per-task breakdown.
-
-    Args:
-        results: Benchmark results
-
-    Returns:
-        Formatted breakdown string
-    """
+def format_task_breakdown(results: EvalResults) -> str:
+    """Format per-task breakdown."""
     lines = [
         "Per-Task Breakdown",
         "=" * 80,
         "",
     ]
 
-    # Header with target names
     header = f"{'Task':<25}"
     for target_name in results.target_names:
         header += f" {target_name[:15]:>15}"
@@ -111,10 +89,8 @@ def format_task_breakdown(results: BenchmarkResults) -> str:
     lines.append("-" * 80)
 
     for task_id in results.task_ids:
-        # Task name row
         lines.append(f"\n{task_id}")
 
-        # Tokens row
         tokens_row = f"  {'tokens':<23}"
         for target_name in results.target_names:
             result = results.get_result(target_name, task_id)
@@ -124,7 +100,6 @@ def format_task_breakdown(results: BenchmarkResults) -> str:
                 tokens_row += f" {'-':>15}"
         lines.append(tokens_row)
 
-        # Score row
         score_row = f"  {'score':<23}"
         for target_name in results.target_names:
             result = results.get_result(target_name, task_id)
@@ -134,7 +109,6 @@ def format_task_breakdown(results: BenchmarkResults) -> str:
                 score_row += f" {'-':>15}"
         lines.append(score_row)
 
-        # Iterations row
         iter_row = f"  {'iterations':<23}"
         for target_name in results.target_names:
             result = results.get_result(target_name, task_id)
@@ -147,15 +121,8 @@ def format_task_breakdown(results: BenchmarkResults) -> str:
     return "\n".join(lines)
 
 
-def format_file_read_analysis(results: BenchmarkResults) -> str:
-    """Format file read pattern analysis.
-
-    Args:
-        results: Benchmark results
-
-    Returns:
-        Formatted analysis string
-    """
+def format_file_read_analysis(results: EvalResults) -> str:
+    """Format file read pattern analysis."""
     lines = [
         "File Read Analysis",
         "=" * 80,
@@ -166,7 +133,6 @@ def format_file_read_analysis(results: BenchmarkResults) -> str:
         lines.append(f"\n{target_name.upper()}")
         lines.append("-" * 40)
 
-        # Aggregate file reads across all tasks
         all_reads: Dict[str, int] = {}
         for task_id in results.task_ids:
             result = results.get_result(target_name, task_id)
@@ -178,23 +144,20 @@ def format_file_read_analysis(results: BenchmarkResults) -> str:
             lines.append("  No file reads recorded")
             continue
 
-        # Sort by count descending
         sorted_reads = sorted(all_reads.items(), key=lambda x: -x[1])
 
-        for path, count in sorted_reads[:20]:  # Top 20
-            # Shorten long paths
+        for path, count in sorted_reads[:20]:
             display_path = path
             if len(path) > 45:
                 display_path = "..." + path[-42:]
 
-            bar = "█" * min(count, 20)
-            marker = " ⚠️" if count > 1 else ""
+            bar = "#" * min(count, 20)
+            marker = " !!" if count > 1 else ""
             lines.append(f"  {count:>3}x {display_path:<45} {bar}{marker}")
 
         if len(sorted_reads) > 20:
             lines.append(f"  ... and {len(sorted_reads) - 20} more files")
 
-        # Summary
         total = sum(all_reads.values())
         unique = len(all_reads)
         duplicates = total - unique
@@ -206,16 +169,8 @@ def format_file_read_analysis(results: BenchmarkResults) -> str:
     return "\n".join(lines)
 
 
-def format_token_growth(results: BenchmarkResults, task_id: Optional[str] = None) -> str:
-    """Format token growth across iterations.
-
-    Args:
-        results: Benchmark results
-        task_id: Optional specific task to show (default: first task)
-
-    Returns:
-        Formatted token growth string
-    """
+def format_token_growth(results: EvalResults, task_id: Optional[str] = None) -> str:
+    """Format token growth across iterations."""
     if not task_id and results.task_ids:
         task_id = results.task_ids[0]
 
@@ -235,7 +190,6 @@ def format_token_growth(results: BenchmarkResults, task_id: Optional[str] = None
 
         lines.append(f"\n{target_name}:")
 
-        # Get token growth from metrics
         token_growth = result.metrics.get("token_growth", [])
         if not token_growth:
             lines.append("  No iteration data available")
@@ -243,9 +197,9 @@ def format_token_growth(results: BenchmarkResults, task_id: Optional[str] = None
 
         max_tokens = max(t[1] for t in token_growth) if token_growth else 1
 
-        for idx, tokens in token_growth[:15]:  # First 15 iterations
+        for idx, tokens in token_growth[:15]:
             bar_len = int(tokens / max_tokens * 30)
-            bar = "█" * bar_len
+            bar = "#" * bar_len
             lines.append(f"  {idx:>2}: {tokens:>6,} {bar}")
 
         if len(token_growth) > 15:
@@ -255,21 +209,13 @@ def format_token_growth(results: BenchmarkResults, task_id: Optional[str] = None
 
 
 def print_results(
-    results: BenchmarkResults,
+    results: EvalResults,
     baseline: Optional[str] = None,
     show_task_breakdown: bool = True,
     show_file_analysis: bool = False,
     show_token_growth: bool = False,
 ) -> None:
-    """Print formatted benchmark results.
-
-    Args:
-        results: Benchmark results
-        baseline: Target name to use as baseline
-        show_task_breakdown: Include per-task breakdown
-        show_file_analysis: Include file read analysis
-        show_token_growth: Include token growth charts
-    """
+    """Print formatted evaluation results."""
     print(format_summary_table(results, baseline))
 
     if show_task_breakdown:

@@ -484,6 +484,41 @@ class TestSkillsTool:
         assert result.success is False
         assert "Unknown action" in result.error
 
+    def test_system_prompt_section_with_skills(self, temp_skills_dir):
+        """Test that get_system_prompt_section returns skill metadata."""
+        tool = SkillsTool(project_path=temp_skills_dir)
+
+        section = tool.get_system_prompt_section()
+
+        assert "Available Skills" in section
+        assert "python-testing" in section
+        assert "git-workflow" in section
+        assert "Best practices for Python testing" in section
+        assert "Git workflow and branching" in section
+        assert "skills(action='load'" in section
+
+    def test_system_prompt_section_no_skills(self, temp_dir):
+        """Test that get_system_prompt_section returns empty string when no skills."""
+        empty_skills = temp_dir / "empty_skills"
+        empty_skills.mkdir()
+
+        tool = SkillsTool(project_path=empty_skills)
+
+        section = tool.get_system_prompt_section()
+
+        assert section == ""
+
+    def test_system_prompt_section_no_full_content(self, temp_skills_dir):
+        """Test that system prompt section contains only metadata, not full skill body."""
+        tool = SkillsTool(project_path=temp_skills_dir)
+
+        section = tool.get_system_prompt_section()
+
+        # Should have descriptions but NOT the full skill body
+        assert "python-testing" in section
+        assert "pytest fixtures" not in section  # Full body content
+        assert "@pytest.fixture" not in section  # Example code from skill
+
 
 class TestSkillFrontmatterParsing:
     """Tests for SKILL.md frontmatter parsing."""

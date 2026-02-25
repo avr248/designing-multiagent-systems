@@ -1,17 +1,17 @@
 """
-Benchmark middleware for metrics collection.
+Run middleware for metrics collection.
 
-This module provides BenchmarkMiddleware - a middleware that captures
-detailed metrics during agent execution for benchmark analysis.
+This module provides RunMiddleware - a middleware that captures
+detailed metrics during agent execution for evaluation analysis.
 """
 
 from typing import Any, Dict, List, Optional
 
-from ..._middleware import BaseMiddleware, MiddlewareContext
+from .._middleware import BaseMiddleware, MiddlewareContext
 
 
-class BenchmarkMiddleware(BaseMiddleware):
-    """Middleware that captures iteration-level metrics for benchmarking.
+class RunMiddleware(BaseMiddleware):
+    """Middleware that captures iteration-level metrics during evaluation runs.
 
     Tracks:
     - Per-iteration token usage (input/output)
@@ -21,7 +21,7 @@ class BenchmarkMiddleware(BaseMiddleware):
     """
 
     def __init__(self):
-        """Initialize benchmark middleware."""
+        """Initialize run middleware."""
         self.reset()
 
     def reset(self) -> None:
@@ -36,7 +36,6 @@ class BenchmarkMiddleware(BaseMiddleware):
     async def process_request(self, context: MiddlewareContext):
         """Track request phase - start of model calls."""
         if context.operation == "model_call":
-            # Start new iteration tracking
             self.current_iteration = {
                 "index": len(self.iterations),
                 "input_tokens": 0,
@@ -50,12 +49,10 @@ class BenchmarkMiddleware(BaseMiddleware):
     async def process_response(self, context: MiddlewareContext, result: Any):
         """Track response phase - capture metrics."""
         if context.operation == "model_call" and self.current_iteration is not None:
-            # Update iteration with actual usage from result
             if hasattr(result, "usage"):
                 self.current_iteration["input_tokens"] = getattr(result.usage, "tokens_input", 0)
                 self.current_iteration["output_tokens"] = getattr(result.usage, "tokens_output", 0)
 
-            # Check for tool calls in response
             if hasattr(result, "message") and hasattr(result.message, "tool_calls"):
                 tool_calls = result.message.tool_calls or []
                 self.current_iteration["tool_call_count"] = len(tool_calls)
@@ -64,7 +61,6 @@ class BenchmarkMiddleware(BaseMiddleware):
             self.current_iteration = None
 
         elif context.operation == "tool_call":
-            # Track tool execution
             tool_name = getattr(context.data, "tool_name", "unknown")
             parameters = getattr(context.data, "parameters", {})
 
@@ -74,7 +70,6 @@ class BenchmarkMiddleware(BaseMiddleware):
                 "success": getattr(result, "success", True) if result else False,
             }
 
-            # Track file reads specifically
             if tool_name in ("read_file", "Read", "read"):
                 path = parameters.get("path") or parameters.get("file_path") or parameters.get("filename", "unknown")
                 self.file_reads[path] = self.file_reads.get(path, 0) + 1
@@ -82,7 +77,6 @@ class BenchmarkMiddleware(BaseMiddleware):
 
             self.tool_calls.append(tool_record)
 
-            # Add to current iteration if active
             if self.current_iteration is not None:
                 self.current_iteration["tool_calls"].append(tool_record)
 
@@ -101,7 +95,7 @@ class BenchmarkMiddleware(BaseMiddleware):
         raise error
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Get collected benchmark metrics.
+        """Get collected metrics.
 
         Returns:
             Dict with aggregated metrics
@@ -156,8 +150,6 @@ class BenchmarkMiddleware(BaseMiddleware):
     ) -> None:
         """Record a compaction event.
 
-        Called by context strategies that support metrics.
-
         Args:
             tokens_before: Tokens before compaction
             tokens_after: Tokens after compaction
@@ -175,6 +167,6 @@ class BenchmarkMiddleware(BaseMiddleware):
     def __repr__(self) -> str:
         metrics = self.get_metrics()
         return (
-            f"BenchmarkMiddleware(iterations={metrics['iterations']}, "
+            f"RunMiddleware(iterations={metrics['iterations']}, "
             f"tokens={metrics['total_tokens']}, tool_calls={metrics['tool_calls']})"
         )

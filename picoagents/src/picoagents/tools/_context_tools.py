@@ -837,6 +837,26 @@ class SkillsTool(BaseTool):
 
         return skills
 
+    def get_system_prompt_section(self) -> str:
+        """Return skill metadata for system prompt injection.
+
+        Pre-populates the system prompt with skill names and descriptions
+        so the model knows what skills exist without calling list first.
+        The model can then call skills(action='load', name='...') directly.
+        """
+        discovered = self._discover_skills()
+        if not discovered:
+            return ""
+
+        lines = [
+            "\n## Available Skills\n",
+            "Use `skills(action='load', name='...')` to load full instructions when a skill matches the task.\n",
+        ]
+        for name, (_, meta) in sorted(discovered.items()):
+            desc = meta.get("description", "No description")
+            lines.append(f"- **{name}**: {desc}")
+        return "\n".join(lines)
+
     async def execute(self, parameters: Dict[str, Any]) -> ToolResult:
         """Execute the skills tool."""
         action = parameters.get("action", "list")

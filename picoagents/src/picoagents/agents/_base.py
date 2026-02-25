@@ -232,17 +232,22 @@ class BaseAgent(ComponentBase[BaseModel], ABC):
             raise AgentExecutionError(f"Unsupported task type: {type(task)}")
 
     async def _prepare_llm_messages(
-        self, task_messages: List[Message]
+        self,
+        task_messages: List[Message],
+        context: Optional["AgentContext"] = None,
     ) -> List[Message]:
         """
         Prepare messages for LLM call including system instructions, memory context, and history.
 
         Args:
             task_messages: Messages from the current task
+            context: Explicit context to use. If None, falls back to self.context.
+                     Passing context explicitly makes this method safe for concurrent use.
 
         Returns:
             Complete list of messages for LLM
         """
+        working_context = context if context is not None else self.context
         messages = []
 
         # Add system message with instructions
@@ -272,23 +277,33 @@ class BaseAgent(ComponentBase[BaseModel], ABC):
                             import json
 
                             context_items.append(json.dumps(memory_content.content))
-                    context = context_items
+                    context_items_list = context_items
                 else:
                     # Legacy List[str] interface (backward compatibility)
-                    context = memory_result
+                    context_items_list = memory_result
 
-                if context and isinstance(context, list):
+                if context_items_list and isinstance(context_items_list, list):
                     system_content += "\n\nRelevant context from memory:\n" + "\n".join(
-                        context
+                        context_items_list
                     )
             except Exception:
                 # Don't fail if memory access fails
                 pass
 
+        # Inject dynamic sections from tools that provide them (e.g. SkillsTool)
+        for tool in self.tools:
+            if hasattr(tool, "get_system_prompt_section"):
+                try:
+                    section = tool.get_system_prompt_section()
+                    if section:
+                        system_content += section
+                except Exception:
+                    pass
+
         messages.append(SystemMessage(content=system_content, source="system"))
 
         # Add message history from context
-        messages.extend(self.context.messages)
+        messages.extend(working_context.messages)
 
         # Add current task messages
         messages.extend(task_messages)

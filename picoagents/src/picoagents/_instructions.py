@@ -103,7 +103,7 @@ TOOL_GUIDES = {
     "task": "- **task**: Delegate complex sub-tasks to a specialist agent with isolated context. Use `prompt` and `agent_type` (explore, code, research, general) parameters. The sub-agent runs independently and returns only its final result.",
     "todo_write": "- **todo_write**: Track progress on multi-step tasks. Pass a `todos` list with `content`, `status` (pending/in_progress/completed), and `id` fields. USE THIS for any task with 3+ steps.",
     "todo_read": "- **todo_read**: Check current task status. Call with no parameters to see all todos.",
-    "skills": "- **skills**: Load domain expertise on demand. Call with `action=list` to see available skills, then `action=get, name=<skill>` to load specific knowledge.",
+    "skills": "- **skills**: Load domain expertise on demand. Available skills are listed in the system prompt. Call with `action=load, name=<skill>` to load full instructions when a skill matches the task.",
     "multi_edit": "- **multi_edit**: Make multiple edits to a file atomically (all succeed or all fail). Use `file_path` and `edits` (list of {old_text, new_text}) parameters.",
     # Research tools
     "web_search": "- **web_search**: Search the web using Tavily. Use `query` parameter. Returns relevant results with snippets.",

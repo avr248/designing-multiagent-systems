@@ -1,19 +1,24 @@
 """
 Base judge class for evaluation scoring.
 
-This module defines the abstract base class for all evaluation judges.
+This module defines the abstract base class for all evaluation judges,
+re-exporting EvalJudge from the parent module and adding answer extraction.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import List, Optional
 
 from ..._cancellation_token import CancellationToken
 from ...messages import AssistantMessage
-from ...types import EvalScore, EvalTrajectory
+from ...types import EvalScore, RunTrajectory
+from .._base import EvalJudge
 
 
-class BaseEvalJudge(ABC):
-    """Abstract base class for evaluation judges."""
+class BaseEvalJudge(EvalJudge):
+    """Base judge with answer extraction strategies.
+
+    Extends EvalJudge with configurable answer extraction from trajectories.
+    """
 
     def __init__(self, name: str, answer_strategy: str = "last_non_empty"):
         """Initialize the judge.
@@ -26,25 +31,14 @@ class BaseEvalJudge(ABC):
                 - "last_content": Last message's content, even if empty
                 - "all_assistant": Concatenate all AssistantMessages
         """
-        self.name = name
+        super().__init__(name)
         self.answer_strategy = answer_strategy
 
-    def extract_answer(self, trajectory: EvalTrajectory) -> str:
+    def extract_answer(self, trajectory: RunTrajectory) -> str:
         """Extract the agent's answer from trajectory.
 
         Uses the configured answer_strategy. Override this method for
         custom extraction logic beyond the built-in strategies.
-
-        Built-in strategies:
-        - last_non_empty: Works for most single-turn cases (default)
-        - last_assistant: Good for tool-using agents (skips tool results)
-        - all_assistant: Good for multi-turn explanations
-        - last_content: Just use last message, even if empty
-
-        Limitations:
-        - Cannot distinguish "answer" from "thinking out loud"
-        - Multi-agent: cannot filter by specific agent source
-        - For complex scenarios, override this method
 
         Args:
             trajectory: The execution trajectory
@@ -87,11 +81,11 @@ class BaseEvalJudge(ABC):
     @abstractmethod
     async def score(
         self,
-        trajectory: EvalTrajectory,
+        trajectory: RunTrajectory,
         criteria: Optional[List[str]] = None,
         cancellation_token: Optional[CancellationToken] = None,
     ) -> EvalScore:
-        """Score an evaluation trajectory.
+        """Score a run trajectory.
 
         Args:
             trajectory: The execution trajectory to score

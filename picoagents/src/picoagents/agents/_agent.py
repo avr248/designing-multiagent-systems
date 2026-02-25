@@ -93,16 +93,29 @@ class Agent(Component[AgentConfig], BaseAgent):
         """
         Execute the agent's main reasoning and action loop.
 
-        This method internally uses run_stream() and filters for messages only,
-        as specified in stub.md.
+        Each call operates on an isolated context and does not mutate
+        self.context. The conversation state is returned in
+        response.context. For multi-turn conversations, pass the
+        previous response's context to the next call::
+
+            r1 = await agent.run("hello")
+            r2 = await agent.run("follow up", context=r1.context)
+
+        This design makes Agent safe for concurrent use — multiple
+        run() calls on the same instance will not interfere.
 
         Args:
-            task: Optional new task (can continue from context alone if not provided)
-            context: Existing context to continue from (created if not provided)
-            cancellation_token: Optional token for cancelling execution
+            task: Optional new task (can continue from context alone
+                if not provided)
+            context: Existing context to continue from. If not
+                provided, self.context is deep-copied as starting
+                point (typically empty).
+            cancellation_token: Optional token for cancelling
+                execution
 
         Returns:
-            AgentResponse containing context with all state and messages
+            AgentResponse containing context with all state and
+            messages
         """
         # Wrap execution in OpenTelemetry span if enabled
         if self._should_create_span():
@@ -222,10 +235,6 @@ class Agent(Component[AgentConfig], BaseAgent):
         # Use provided context or create one
         working_context = context if context else self.context.model_copy(deep=True)
 
-        # Store the original context and use working_context for this run
-        original_context = self.context
-        self.context = working_context
-
         try:
             # Check for cancellation at the start
             if cancellation_token and cancellation_token.is_cancelled():
@@ -260,12 +269,15 @@ class Agent(Component[AgentConfig], BaseAgent):
                     if has_approvals:
                         # Process the pending tool calls with their approval responses
                         # Pass empty list since context messages are added inside _prepare_llm_messages
-                        llm_messages_temp = await self._prepare_llm_messages([])
+                        llm_messages_temp = await self._prepare_llm_messages(
+                            [], context=working_context
+                        )
 
                         # Process each tool call
                         for tool_call in last_message.tool_calls:
                             async for item in self._execute_tool_call(
-                                tool_call, llm_messages_temp, cancellation_token
+                                tool_call, llm_messages_temp, cancellation_token,
+                                context=working_context,
                             ):
                                 yield item
                                 if isinstance(
@@ -275,7 +287,9 @@ class Agent(Component[AgentConfig], BaseAgent):
 
             # 2. Prepare messages for LLM including system instructions, memory, history
             # Pass empty list since context messages are added inside _prepare_llm_messages
-            llm_messages = await self._prepare_llm_messages([])
+            llm_messages = await self._prepare_llm_messages(
+                [], context=working_context
+            )
 
             # === DETERMINISTIC START HOOKS ===
             # Run before the first LLM call. These are Python code, not LLM-controlled.
@@ -464,7 +478,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                         async for item in self.middleware_chain.execute_stream(
                             operation="model_call",
                             agent_name=self.name,
-                            agent_context=self.context,
+                            agent_context=working_context,
                             data=llm_messages,
                             func=_model_call,
                             metadata=model_metadata,
@@ -527,7 +541,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                         )
 
                     # Add assistant message to context and working messages
-                    self.context.add_message(assistant_message)
+                    working_context.add_message(assistant_message)
                     llm_messages.append(assistant_message)
 
                     # 4. Handle tool calls if present
@@ -542,6 +556,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                                 assistant_message.tool_calls,
                                 llm_messages,
                                 cancellation_token,
+                                context=working_context,
                             ):
                                 yield item
                                 # Track messages for final response
@@ -557,7 +572,8 @@ class Agent(Component[AgentConfig], BaseAgent):
                             # Single tool call - execute sequentially
                             for tool_call in assistant_message.tool_calls:
                                 async for item in self._execute_tool_call(
-                                    tool_call, llm_messages, cancellation_token
+                                    tool_call, llm_messages, cancellation_token,
+                                    context=working_context,
                                 ):
                                     yield item
                                     # Track messages for final response
@@ -748,15 +764,12 @@ class Agent(Component[AgentConfig], BaseAgent):
             )
             yield error_response
 
-        finally:
-            # Restore the original context
-            self.context = original_context
-
     async def _execute_tool_calls_parallel(
         self,
         tool_calls: List[ToolCallRequest],
         llm_messages: List[Message],
         cancellation_token: Optional[CancellationToken] = None,
+        context: Optional[AgentContext] = None,
     ) -> AsyncGenerator[Union[Message, AgentEvent], None]:
         """
         Execute multiple tool calls in parallel for improved performance.
@@ -768,6 +781,7 @@ class Agent(Component[AgentConfig], BaseAgent):
             tool_calls: List of tool calls to execute in parallel
             llm_messages: Current message history for context
             cancellation_token: Optional token for cancelling execution
+            context: Explicit context to use (for concurrent safety)
 
         Yields:
             Events and ToolMessages from all tool executions
@@ -781,7 +795,8 @@ class Agent(Component[AgentConfig], BaseAgent):
             """Helper to collect all items from a single tool execution."""
             items = []
             async for item in self._execute_tool_call(
-                tool_call, llm_messages, cancellation_token
+                tool_call, llm_messages, cancellation_token,
+                context=context,
             ):
                 items.append(item)
             return items
@@ -827,6 +842,7 @@ class Agent(Component[AgentConfig], BaseAgent):
         tool_call: ToolCallRequest,
         llm_messages: List[Message],
         cancellation_token: Optional[CancellationToken] = None,
+        context: Optional[AgentContext] = None,
     ) -> AsyncGenerator[Union[Message, AgentEvent], None]:
         """
         Execute a single tool call and yield events and result message.
@@ -835,10 +851,13 @@ class Agent(Component[AgentConfig], BaseAgent):
             tool_call: The tool call to execute
             llm_messages: Current message history for context
             cancellation_token: Optional token for cancelling execution
+            context: Explicit context to use (for concurrent safety).
+                     Falls back to self.context if not provided.
 
         Yields:
             Events and the final ToolMessage
         """
+        working_context = context if context is not None else self.context
         # Check for cancellation before tool execution
         if cancellation_token and cancellation_token.is_cancelled():
             raise asyncio.CancelledError()
@@ -872,7 +891,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                 yield tool_response_event
 
                 # Add tool result to context and working messages
-                self.context.add_message(result)
+                working_context.add_message(result)
                 llm_messages.append(result)
 
                 # Yield the final result message
@@ -884,11 +903,11 @@ class Agent(Component[AgentConfig], BaseAgent):
 
             if tool.approval_mode == ApprovalMode.ALWAYS:
                 # Check if we already have approval for this specific tool call
-                existing_approval = self.context.get_approval_response(tool_call.call_id)
+                existing_approval = working_context.get_approval_response(tool_call.call_id)
 
                 if existing_approval is None:
                     # No approval yet - create approval request and pause
-                    approval_request = self.context.add_approval_request(
+                    approval_request = working_context.add_approval_request(
                         tool_call=tool_call,
                         tool_name=tool_call.tool_name
                     )
@@ -924,7 +943,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                     yield tool_response_event
 
                     # Add result to context and messages
-                    self.context.add_message(result)
+                    working_context.add_message(result)
                     llm_messages.append(result)
 
                     # Yield the denial message
@@ -957,7 +976,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                             error=item.error,
                         )
                         # Add to context and messages
-                        self.context.add_message(result)
+                        working_context.add_message(result)
                         llm_messages.append(result)
                         yield result
                     elif isinstance(item, Message):
@@ -987,7 +1006,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                 async for item in self.middleware_chain.execute_stream(
                     operation="tool_call",
                     agent_name=self.name,
-                    agent_context=self.context,
+                    agent_context=working_context,
                     data=tool_call,
                     func=_tool_call,
                 ):
@@ -1025,7 +1044,7 @@ class Agent(Component[AgentConfig], BaseAgent):
                 yield tool_response_event
 
                 # Add tool result to context and working messages
-                self.context.add_message(result)
+                working_context.add_message(result)
                 llm_messages.append(result)
 
                 # Yield the final result message
@@ -1044,7 +1063,7 @@ class Agent(Component[AgentConfig], BaseAgent):
             )
 
             # Add error result to context and working messages
-            self.context.add_message(error_result)
+            working_context.add_message(error_result)
             llm_messages.append(error_result)
 
             # Yield the error result
@@ -1065,7 +1084,7 @@ class Agent(Component[AgentConfig], BaseAgent):
             )
 
             # Add error result to context and working messages
-            self.context.add_message(error_result)
+            working_context.add_message(error_result)
             llm_messages.append(error_result)
 
             # Yield the error result
